@@ -1,6 +1,6 @@
 import { Component, OnInit, Input, ViewChild, ElementRef } from '@angular/core';
 import { CardStyle } from '../core/types/cardStyle';
-import { svgParse, prepareTree } from '../utils/tools';
+import { svgParse } from '../utils/tools';
 
 @Component({
   selector: 'ngx-tree-chart',
@@ -13,6 +13,10 @@ export class TreeChartComponent implements OnInit {
   private _svg: SVGSVGElement = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   private _matrix: DOMMatrix = this._svg.createSVGMatrix();
   private _dataSource: any[] = [];
+  private _flatSource: any[] = [];
+
+  private _maxDeepLevelCount: number = 0;
+  private _maxDeepValue: number = 0;
 
   @Input() keyExpr: string = 'id';
   @Input() displayExpr: string = 'name';
@@ -20,8 +24,8 @@ export class TreeChartComponent implements OnInit {
   @Input() childsExpr: string = 'childs';
   @Input() colorExpr: string = 'color';
   @Input() iconExpr: string = 'icon';
-  @Input() width: number = 650;
-  @Input() height: number = 500;
+  @Input() width: number = 1500;
+  @Input() height: number = 1200;
   @Input() dataStructure: 'tree' | 'plain' = 'plain';
   @Input()
   get dataSource(): any[] { return this._dataSource }
@@ -32,6 +36,7 @@ export class TreeChartComponent implements OnInit {
   @Input() cardStyle: CardStyle = <CardStyle>{
     width: 300,
     height: 65,
+    gap: 50,
     fill: '#ff0000',
     opacity: 1,
     rx: 4,
@@ -43,7 +48,7 @@ export class TreeChartComponent implements OnInit {
   ngOnInit() {
     this._svg.setAttribute('width', this.width.toString());
     this._svg.setAttribute('height', this.height.toString());
-    this._svg.setAttribute('viewBox', '0 0 650 500');
+    this._svg.setAttribute('viewBox', '0 0 3000 900');
     this._svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
     // this._svg.addEventListener('mousedown', this.mouseDown, false); // mousewheel duplicates dblclick function
@@ -59,8 +64,34 @@ export class TreeChartComponent implements OnInit {
       throw new Error('Data source is not array!');
     }
 
+    this._maxDeepLevelCount = 0;
+    this._maxDeepValue = 0;
     if (this.dataStructure == 'plain') {
-      prepareTree(data, null).then(tree => {
+      const prepareTree = async (array: any[], parentId: number, deepLevel: number) => {
+        const newChilds = [];
+        const deep = deepLevel + 1;
+
+        const childs = array.filter(a => a[this.parentIdExpr] == parentId);
+
+        if (childs.length && deep > this._maxDeepValue) {
+          this._maxDeepValue = deep;
+        }
+
+        childs.forEach(item => {
+          prepareTree(array, item[this.keyExpr], deep).then(child => {
+            item.deepLevel = deep;
+            item[this.childsExpr] = child;
+            newChilds.push(item);
+          })
+        });
+
+        await Promise.all(newChilds);
+        return newChilds;
+      }
+
+      prepareTree(data, null, 0).then(tree => {
+        this._maxDeepLevelCount = data.sort((a, b) => b.childs.length - a.childs.length)[0].childs.length;
+        this._flatSource = data;
         this._dataSource = tree;
         this.draw();
       })
@@ -72,11 +103,32 @@ export class TreeChartComponent implements OnInit {
 
   draw() {
     this.divElement.nativeElement.appendChild(this._svg);
-    this.createCard();
+
+    const maxWidth = this._maxDeepLevelCount * (this.cardStyle.width + this.cardStyle.gap);
+    for (let i = 1; i <= this._maxDeepValue; i++) {
+      const nodes = this._flatSource.filter(a => a.deepLevel == i);
+      if (nodes.length == 1) {
+        this.createCard(
+          nodes[0][this.keyExpr],
+          nodes[0].deepLevel,
+          (Math.round(this._maxDeepLevelCount / 2) - 1) * (this.cardStyle.width + this.cardStyle.gap),
+          (i * (this.cardStyle.height + this.cardStyle.gap))
+        )
+      } else {
+        nodes.forEach((node, index) => {
+          this.createCard(
+            node[this.keyExpr],
+            node.deepLevel,
+            index * (maxWidth / nodes.length),
+            (i * (this.cardStyle.height + this.cardStyle.gap))
+          )
+        })
+      }
+    }
   }
 
-  createCard() {
-    const card = svgParse('g', { transform: 'matrix(1,0,0,1,0,120)' });
+  createCard(id: number, deepLevel, x: number, y: number) {
+    const card = svgParse('g', { nodeid: id, deepLevel: deepLevel, transform: `translate(${x} ${y})` });
     card.appendChild(svgParse('rect', this.cardStyle));
     this._svg.appendChild(card);
   }
